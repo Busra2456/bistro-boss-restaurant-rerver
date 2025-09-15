@@ -3,6 +3,7 @@ const app = express();
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
 const port = process.env.POST || 5000;
 //middleware
 app.use(cors());
@@ -10,7 +11,7 @@ app.use(express.json())
 
 
 
-const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId, ClientSession } = require('mongodb');
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.whg4qi0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -31,6 +32,7 @@ async function run() {
  const menuCollection = client.db("bossDb").collection("menu");
  const reviewsCollection = client.db("bossDb").collection("reviews")
  const cartsCollection = client.db("bossDb").collection("carts")
+ const paymentsCollection = client.db("bossDb").collection("payments")
 
  //jwt related api
  app.post('/jwt',async(req,res) =>{
@@ -149,6 +151,20 @@ if (existingUser){
       })
 
       app.patch('/menu/:id',async(req,res) =>{
+        const item = req.body;
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id)}
+        const updateDoc = {
+          $set:{
+            name:item.name,
+            category: item.category,
+            price:item.price,
+            recipe:item.recipe,
+            image: item.image
+          }
+        }
+        const result = await menuCollection.updateOne(filter,updateDoc)
+        res.send(result);
 
       })
 
@@ -186,6 +202,36 @@ app.delete('/menu/:id',verifyToken, verifyAdmin, async(req,res)=>{
         const query = { _id: new ObjectId(id) }
         const result = await cartsCollection.deleteOne(query)
         res.send(result);
+      })
+      //payment intent
+      app.post('/create-payment-intent', async (req,res) =>{
+        const { price } =req.body;
+        const amount = parseInt(price * 100);
+        console.log(amount,'amount inside the intent')
+
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount:amount,
+          currency: 'usd',
+          payment_method_types: ['card']
+          
+        })
+        res.send({
+          clientSecret: paymentIntent.client_secret
+        })
+      })
+
+
+      app.post('/payments', async(req,res)=>{
+        const payment = req.body;
+        const paymentsResult = await paymentsCollection.insertOne(payment)
+        // carefully delete each item from the cart
+        console.log('payment info',payment);
+       
+        const query = {_id: {
+          $in: payment.cartIds.map(id => new ObjectId(id))
+        }}; 
+        const deleteResult = await cartsCollection.deleteMany(query);
+        res.send({paymentsResult, deleteResult});
       })
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
